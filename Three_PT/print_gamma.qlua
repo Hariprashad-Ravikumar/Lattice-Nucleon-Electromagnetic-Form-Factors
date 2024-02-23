@@ -1,0 +1,3 @@
+require "stdlib"
+g2 = gamma{n=2}
+printf("g2        = %s\n", tostring(g2))

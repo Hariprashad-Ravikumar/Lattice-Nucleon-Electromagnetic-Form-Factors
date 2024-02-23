@@ -1,0 +1,111 @@
+require "stdlib"
+require "gauge"
+require "qcd" 
+
+-- 2pt
+function make_hadspec_standard(c2pt, tsrc, lt, bc_t)
+  local c2pt_std = vector.complex(lt)
+  for i = 0, tsrc-1 do
+    c2pt_std[lt + i - tsrc] = bc_t * c2pt[i]
+  end
+  for i = tsrc, lt-1 do
+    c2pt_std[i - tsrc] = c2pt[i]
+  end
+  return c2pt_std
+end
+
+
+function qcd_proton3(d, u)
+  local S =  gamma{mu=0} * gamma{mu=2} * (1 + gamma{mu=3}) / 2
+  local T =  (1 - gamma{mu=0}*gamma{mu=1}*complex(0,1)) * (1 + gamma{mu=3}) / 2
+  local a2 = T * u
+  local a3 = qcd.quarkContract13(d * S, S * u)
+  return (a2:spintrace() * a3:spintrace() + (a2 * a3):spintrace()):trace()
+end
+
+-- cfg = 1776
+-- stream = ""
+-- cfgstream = ""
+
+
+
+-- cfg_filename="/pscratch/sd/e/engel/cfgs/cl21_32_96_b6p1_m0p2850_m0p2450_" .. cfgstream .. "cfg_" .. tostring(cfg) .. ".lime"
+
+Nx = 32
+Ny = 32
+Nz = 32
+Nt = 96
+latsize = {Nx,Ny,Nz,Nt}
+network_geom = {4, 4, 4, 3}
+
+function open_qdpc_read(L, name)
+  local qdp_r = qcd.qdpc.Reader(L, name)
+  return qdp_r
+end
+
+function load_qdpc_gauge(L, name)
+  local qdp_r, finfo = open_qdpc_read(L, name)
+  local gauge, rinfo = qdp_r:ColorMatrix(4)
+  qdp_r:close()
+  return gauge, finfo, rinfo
+end
+
+
+-- handy function to copy tables
+function copy_table(tab) 
+  local a = {}; for i,v in pairs(tab) do a[i] = v end
+  return a
+end
+
+L = qcd.lattice(latsize,{network=network_geom})
+h5_writer = qcd.hdf5.Writer("/pscratch/sd/h/hari_8/saved_prop_files/save_3pt_2pt/save_3pt_2pt_cfgs_psnk_0_0_0__qy_cfg_1776_2092_.h5") 
+
+
+tsnk = 10  -- sink timeslice
+
+psnk = {0,-1,0,0} -- sink momentum
+
+t_axis = 3  -- axis; currently works for t_axis ==3
+
+qlist = {{0,0,0,0}, {1,0,0,0}, {2,0,0,0}, {3,0,0,0}, {4,0,0,0}, {5,0,0,0}}  -- list of insertion momenta {q}; each q be with #q = #L
+
+time_rev = false
+
+bc_2pt_t =  -1 -- BC for 2pt function in t dir; need to get the correct sign for 3pt's 
+
+-- sources
+sources = {{0, 0, 0, 0}, {8, 0, 0, 0}, {16, 0, 0, 0}, {24, 0, 0, 0}, {0, 8, 0, 0}, {0, 16, 0, 0}, {0, 24, 0, 0}, {0, 0, 8, 0}, {0, 0, 16, 0}, {0, 0, 24, 0}}
+
+flavor_list = { "D", "U"}
+
+gamma_list = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15}
+
+for cfg = 1776, 2092, 4 do
+  for i, src_i in pairs(sources) do
+    local stream = "_b_"
+    local cfgstream = "b_"
+    local cfg_filename = "/pscratch/sd/e/engel/cfgs/cl21_32_96_b6p1_m0p2850_m0p2450_" .. cfgstream .. "cfg_" .. tostring(cfg) .. ".lime"
+    local csrc = {src_i[1], src_i[2], src_i[3], src_i[4]}
+    local tsrc = csrc[1+t_axis]
+    
+    -- calculate and save 2pt
+    local reader_snk_smear_fw_p, rinfo_snk_smear_fw_p = qcd.qdpc.Reader(L, "/pscratch/sd/h/hari_8/saved_prop_files/SinkSmeared_forward." .. stream .. tostring(cfg) .. ".x" .. tostring(src_i[1]) .. "y" .. tostring(src_i[2]) .. "z" .. tostring(src_i[3]) .. "t" .. tostring(src_i[4]) .. "_" .. tostring(psnk[2]) .. ".dirprop")
+    local snk_smear_fw_p, f_info_smear_fw = reader_snk_smear_fw_p:DiracPropagator()           -- smeared forward propagator
+    
+    local qq = qcd_proton3(snk_smear_fw_p, snk_smear_fw_p)
+    local psnk_list_neg = {}
+    for j,pj in ipairs(psnk) do
+      psnk_list_neg[j] = -pj
+    end
+    psnk_list_neg[1+t_axis] = 0
+    local psnk_pw = L:planewave(csrc, psnk_list_neg)
+    local mset_tcoord = L:MultiSet(tsnk+1, L:pcoord(t_axis))
+    local pt2 = make_hadspec_standard(qq:project(psnk_pw, mset_tcoord), tsrc, tsnk+1, bc_2pt_t)
+    local path_to_pt2 = string.format("/cfg_%s/TwoPT_proton3/x%d_y%d_z%d_t%d/PX%d_PY%d_PZ%d_T%d", cfg, csrc[1], csrc[2], csrc[3], csrc[4], psnk[1], psnk[2], psnk[3], tsnk)
+    local write_options = { transfer = "collective", precision = "double" }
+    h5_writer:write(path_to_pt2, pt2, write_options)  
+  end
+end
+
+h5_writer:close()
+

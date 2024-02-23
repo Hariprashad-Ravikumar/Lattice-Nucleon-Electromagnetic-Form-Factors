@@ -1,0 +1,136 @@
+-- TODO need qcd.momentum_project(field, momentum, t_axis)
+-- better to have single function for fields = real, complex, color&Dirac vectors&matrices
+-- and for 3d & 4d mom projections:
+--    d=3 if t_axis is present; momentum[t_axis+1] is ignored; return vector.<whatever>
+--    d=4 if no t_axis given; return scalar; required for NPR implementation
+-- FIXME much copied code from lhpc/bb.qlua; identify common functions and put into a sep.file
+function calc_3pt_2pt(
+    L,
+    snk_smear_fw_p,     -- Sink Smeared forward propagator for 2pt
+    fw_p,               -- forward propagator
+    bw_p_adj, gauge_u,  -- backward propagator, Dslash^-1 * g5 * SeqSrc^\dag *g5
+    csrc,               -- source coord: x,y,z,t
+    tsnk, psnk,         -- sink timeslice, sink momentum
+    t_axis,             -- axis; currently works for t_axis ==3
+    qlist,              -- list of insertion momenta {q}; each q be with #q = #L
+    time_rev,           -- whether to reverse time (true for proton_negpar_3)
+    bc_2pt_t,           -- BC for 2pt function in t dir; need to get the correct sign for 3pt's
+    flavor,             -- flavor whether U or D
+    cfg                 -- configuration
+    )
+  -- hdf5 writer
+  h5_writer = qcd.hdf5.Writer("/pscratch/sd/h/hari_8/saved_prop_files/save_3pt_2pt/save_2pt_3pt.h5")
+  -- handy function to copy tables
+  local function copy_table(tab) 
+    local a = {}; for i,v in pairs(tab) do a[i] = v end
+    return a
+  end
+  
+  local bw_p = gamma{n=15} * bw_p_adj:adjoin() * gamma{n=15} -- XXX c3pt = tr[bw_p.Gamma.fw_p]
+  local lt = L[t_axis]
+  local tsrc = csrc[1+t_axis]
+  -- calc source-sink separation
+  local src_snk_dt = nil
+  if not time_rev then
+    if tsrc < tsnk then src_snk_dt = tsnk - tsrc
+    else src_snk_dt = lt + tsnk - tsrc end
+  else
+    if tsnk < tsrc then src_snk_dt = tsrc - tsnk
+    else src_snk_dt = lt + tsrc - tsnk end
+  end
+  -- append '/' to kpath prefix if non-empty
+  -- if (0 < h5_kpath_prefix:len()) then h5_kpath_prefix = h5_kpath_prefix .. '/' end
+  
+  -- init plane waves for each momentum 
+  local qlist_pw = {}
+  for i,q in pairs(qlist) do
+    local q_cp = copy_table(q)
+    q_cp[1+t_axis] = 0
+    qlist_pw[i] = L:planewave(csrc, q_cp)
+  end
+  -- init timeslice subsets
+  local time_mset = L:MultiSet(L[t_axis], L:pcoord(t_axis))
+  local mset_src_snk = nil
+  if not time_rev then
+     mset_src_snk = L:MultiSet(src_snk_dt + 1, (lt - tsrc + L:pcoord(t_axis)) % lt)
+  else
+     mset_src_snk = L:MultiSet(src_snk_dt + 1, (lt + tsrc - L:pcoord(t_axis)) % lt)
+  end
+
+  -- make keypath
+  local function h5_keypath(gn, qext)
+    if not (t_axis == 3) then return nil end    -- general case is involved
+    return string.format(
+        "/cfg_%s/ThreePT_flavor_%s/x%d_y%d_z%d_t%d/PX%d_PY%d_PZ%d_T%d/g%d/qx%d_qy%d_qz%d",
+        cfg, flavor, csrc[1], csrc[2], csrc[3], csrc[4], 
+        psnk[1], psnk[2], psnk[3], tsnk,
+        gn, qext[1], qext[2], qext[3])
+  end
+ 
+  -- 2pt
+  local function make_hadspec_standard(c2pt, tsrc, lt, bc_t)
+    local c2pt_std = vector.complex(lt)
+    for i = 0, tsrc-1 do
+      c2pt_std[lt + i - tsrc] = bc_t * c2pt[i]
+    end
+    for i = tsrc, lt-1 do
+      c2pt_std[i - tsrc] = c2pt[i]
+    end
+    return c2pt_std
+  end
+
+
+  local function qcd_proton3(d, u)
+    local S =  gamma{mu=0} * gamma{mu=2} * (1 + gamma{mu=3}) / 2
+    local T =  (1 - gamma{mu=0}*gamma{mu=1}*complex(0,1)) * (1 + gamma{mu=3}) / 2
+    local a2 = T * u
+    local a3 = qcd.quarkContract13(d * S, S * u)
+    return (a2:spintrace() * a3:spintrace() + (a2 * a3):spintrace()):trace()
+  end
+  
+  local qq = qcd_proton3(snk_smear_fw_p, snk_smear_fw_p)
+  
+  local psnk_list_neg = {}
+  for j,pj in ipairs(psnk) do
+    psnk_list_neg[j] = -pj
+  end
+  psnk_list_neg[1+t_axis] = 0
+  local psnk_pw = L:planewave(csrc, psnk_list_neg)
+  local mset_tcoord = L:MultiSet(tsnk+1, L:pcoord(t_axis))
+  local pt2 = make_hadspec_standard(qq:project(psnk_pw, mset_tcoord), tsrc, tsnk+1, bc_2pt_t)
+  local path_to_pt2 = string.format("/cfg_%s/TwoPT_proton3/x%d_y%d_z%d_t%d/PX%d_PY%d_PZ%d_T%d", cfg, csrc[1], csrc[2], csrc[3], csrc[4], psnk[1], psnk[2], psnk[3], tsnk)
+  local write_options = { transfer = "collective", precision = "double" }
+  h5_writer:write(path_to_pt2, pt2, write_options)  
+
+  local gamma_list_all = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15}
+
+  -- compute contractions with 16 gammas, project on momenta, save bb
+
+  local function save_clover(fw_p, bw_p, gamma_list)
+    -- local clover_u = clover_term(gauge_u, 0, 1) -- (U_p - U_p^H)/(8i)
+    -- clover_u = (clover_u      -- subtract trace
+    --            - clover_u:trace() * clover_u.lattice:ColorMatrix(1. / clover_u:colors()))
+    local fw_times_bw =  fw_p * bw_p
+    if nil == gamma_list then gamma_list = gamma_list_all end
+
+    for i_gn, gn in pairs(gamma_list) do
+      local bb = (gamma{n=gn} * fw_times_bw):trace()
+      -- XXX Chroma signs [sic!]; 
+      -- note that in general can be bc_2pt_t != -1
+      if time_rev then
+        if (gn < 8) then bb = bb * bc_2pt_t
+        else bb = bb * (-bc_2pt_t) end
+      end
+      for iq = 1, #qlist do
+        three_pt = bb:project(qlist_pw[iq], mset_src_snk)
+        -- print("path to 3pt: ", h5_keypath(gn, qlist[iq]))
+        -- print(#three_pt)
+        local write__options = { transfer = "collective", precision = "double" }
+        h5_writer:write(h5_keypath(gn, qlist[iq]), bb:project(qlist_pw[iq], mset_src_snk), write__options)
+      end
+    end
+  end
+  local gamma_list = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15}
+  save_clover(fw_p, bw_p, gamma_list)
+  h5_writer:close()
+end

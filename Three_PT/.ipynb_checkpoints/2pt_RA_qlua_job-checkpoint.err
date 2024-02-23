@@ -1,0 +1,7 @@
+srun: error: nid006816: task 191: Exited with exit code 1
+srun: Terminating StepId=21311140.0
+slurmstepd: error: *** STEP 21311140.0 ON nid005361 CANCELLED AT 2024-02-04T18:53:22 ***
+srun: error: nid005361: tasks 0-63: Terminated
+srun: error: nid006551: tasks 64-127: Terminated
+srun: error: nid006816: tasks 128-190: Terminated
+srun: Force Terminated StepId=21311140.0

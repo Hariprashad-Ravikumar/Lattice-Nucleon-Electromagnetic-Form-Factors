@@ -1,0 +1,27 @@
+require "stdlib"
+require "clover-3pt"
+require "gauge"
+require("qcd")
+
+
+
+Nx = 32
+Ny = 32
+Nz = 32
+Nt = 96
+latsize = {Nx,Ny,Nz,Nt}
+network_geom = {4, 4, 4, 3}
+
+L = qcd.lattice{32,32,32,96}
+-- aff_reader = qcd.aff.Reader("/pscratch/sd/h/hari_8/save_clover_3pt.aff")
+-- foo = aff_reader:read("/clover_3pt/x0_y0_z0_t0_/PX0_PY0_PZ0_T3/CLOVER_")
+
+local gamma_sigma_ab = {}
+for clover_a = 0, #L - 2 do
+  for clover_b = clover_a + 1, #L - 1 do
+    gamma_sigma_ab[1] = 2^clover_a + 2^clover_b
+    gamma_sigma_ab[2] = 15 - gamma_sigma_ab[1]
+    print(gamma_sigma_ab[1])
+    print(gamma_sigma_ab[2])
+  end
+end
